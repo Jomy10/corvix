@@ -6,7 +6,7 @@ use uuid::Uuid;
 pub type TaskId = Uuid;
 type BoxedWork<Err> = Box<dyn FnOnce() -> Result<(), Err> + Send + Sync + 'static>;
 
-pub struct Task<Err> {
+pub(crate) struct Task<Err> {
     // TODO: for logging
     id: TaskId,
     #[allow(unused)]
@@ -17,14 +17,18 @@ pub struct Task<Err> {
 }
 
 impl<Err> Task<Err> {
-    pub(crate) fn new(work: BoxedWork<Err>, id: TaskId, priority: u32) -> Self {
+    pub(crate) fn new(work: BoxedWork<Err>, id: TaskId, priority: u32, name: Option<String>) -> Self {
         Self {
             id,
-            name: None,
+            name,
             priority,
             work: Mutex::new(Some(work)),
             failed: false.into()
         }
+    }
+
+    pub(crate) fn name(&self) -> Option<&str> {
+        self.name.as_ref().map(|s| s.as_str())
     }
 
     pub(crate) fn run(&self) -> Result<(), TaskExecutionError<Err>> {

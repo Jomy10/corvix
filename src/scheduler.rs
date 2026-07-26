@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use itertools::Itertools;
 use log::trace;
+use petgraph::graph::DiGraph;
 use petgraph::graphmap::DiGraphMap;
 use uuid::Uuid;
 
@@ -23,16 +25,39 @@ impl<Err> Scheduler<Err> {
     }
 
     pub fn add_task(&mut self, work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static) -> Result<TaskId, SchedulerError> {
-        return self.add_task_with_priority(work, 0);
+        return self.add_task_impl(work, None, 0);
     }
 
     pub fn add_task_with_priority(&mut self,
         work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
         priority: u32
     ) -> Result<TaskId, SchedulerError> {
+        self.add_task_impl(work, None, priority)
+    }
+
+    pub fn add_task_with_name(&mut self,
+        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
+        name: impl Into<String>,
+    ) -> Result<TaskId, SchedulerError> {
+        self.add_task_impl(work, Some(name.into()), 0)
+    }
+
+    pub fn add_task_with_name_and_priority(&mut self,
+        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
+        name: impl Into<String>,
+        priority: u32
+    ) -> Result<TaskId, SchedulerError> {
+        self.add_task_impl(work, Some(name.into()), priority)
+    }
+
+    fn add_task_impl(&mut self,
+        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
+        name: Option<String>,
+        priority: u32
+    ) -> Result<TaskId, SchedulerError> {
         let id = Uuid::new_v4();
 
-        let task = Task::new(Box::new(work), id, priority);
+        let task = Task::new(Box::new(work), id, priority, name);
 
         self.tasks.insert(id, task);
         self.dag.add_node(id);
@@ -47,6 +72,77 @@ impl<Err> Scheduler<Err> {
     pub fn change_priority(&mut self, task_id: TaskId, priority: u32) {
         let task = self.tasks.get_mut(&task_id).unwrap();
         task.priority = priority;
+    }
+
+    /// Get the DAG of the scheduler. Can be used with `petgraph::dot::Dot` for
+    /// visualization.
+    pub fn graph(&self) -> &DiGraphMap<Uuid, ()> {
+        &self.dag
+    }
+
+    /// Creates a new graph with names instead of id's, which is more suited
+    /// for visualization using `petgraph::dot::Dot`.
+    pub fn graph_with_names(&self) -> DiGraph<Cow<'_, str>, ()> {
+        #[cfg(feature = "rayon")]
+        {
+            use std::sync::Arc;
+
+            use petgraph::graph::NodeIndex;
+            use rayon::iter::ParallelIterator;
+
+            struct Storage<'a> {
+                output_graph: Option<DiGraph<Cow<'a, str>, ()>>,
+                indices: HashMap<Uuid, NodeIndex>,
+            }
+
+            let storage = Arc::new(Mutex::new(Storage {
+                output_graph: Some(DiGraph::<Cow<'_, str>, ()>::new()),
+                indices: HashMap::new()
+            }));
+
+            self.dag.par_nodes().for_each(|task_id| {
+                let task = &self.tasks[&task_id];
+                let name = task.name().map(|str| Cow::Borrowed(str))
+                    .unwrap_or_else(|| Cow::Owned(task.id().to_string()));
+                let mut storage = storage.lock().unwrap();
+                let index = storage.output_graph.as_mut().unwrap().add_node(name);
+                storage.indices.insert(task_id, index);
+            });
+
+            self.dag.par_all_edges().for_each(|edge| {
+                let task_id1 = &self.tasks[&edge.0].id();
+                let task_id2 = &self.tasks[&edge.1].id();
+                let mut storage = storage.lock().unwrap();
+                let index1 = storage.indices[task_id1];
+                let index2 = storage.indices[task_id2];
+                storage.output_graph.as_mut().unwrap().add_edge(index1, index2, *edge.2);
+            });
+
+            let mut lock = storage.lock().unwrap();
+            return lock.output_graph.take().unwrap();
+        }
+
+        #[cfg(not(feature = "rayon"))]
+        {
+            let mut output_graph = DiGraph::<Cow<'_, str>, ()>::new();
+            let mut indices = HashMap::new();
+
+            for task_id in self.dag.nodes() {
+                let task = &self.tasks[&task_id];
+                let name = task.name().map(|str| Cow::Borrowed(str))
+                    .unwrap_or_else(|| Cow::Owned(task.id().to_string()));
+                let index = output_graph.add_node(name);
+                indices.insert(task_id, index);
+            }
+
+            for edge in self.dag.all_edges() {
+                let task_id1 = &self.tasks[&edge.0].id();
+                let task_id2 = &self.tasks[&edge.1].id();
+                output_graph.add_edge(indices[task_id1], indices[task_id2], *edge.2);
+            }
+
+            return output_graph;
+        }
     }
 
     pub(crate) fn create_instance(self, fail_fast: bool) -> Result<SchedulerInstance<Err>, SchedulerError> {
