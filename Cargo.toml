@@ -1,9 +1,9 @@
 [package]
 name = "corvix"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Jonas Everaert"]
-description = "A task scheduler with priorities support"
+description = "A task scheduler with dependency and priorities support"
 repository = "https://github.com/jomy10/batcher"
 license = "MIT"
 keywords = ["scheduler", "framework", "priority", "queue", "task"]
