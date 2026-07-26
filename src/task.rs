@@ -1,98 +1,63 @@
-use std::sync::{Mutex, PoisonError};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use uuid::Uuid;
 
 pub type TaskId = Uuid;
-type BoxedWork = Box<dyn FnOnce() + Send + Sync + 'static>;
+type BoxedWork<Err> = Box<dyn FnOnce() -> Result<(), Err> + Send + Sync + 'static>;
 
-pub struct Task {
+pub struct Task<Err> {
     // TODO: for logging
+    id: TaskId,
     #[allow(unused)]
     name: Option<String>,
     pub(crate) priority: u32,
-    work: Mutex<Option<BoxedWork>>,
+    work: Mutex<Option<BoxedWork<Err>>>,
+    pub(crate) failed: AtomicBool
 }
 
-impl Task {
-    pub(crate) fn new(work: BoxedWork, priority: u32) -> Self {
+impl<Err> Task<Err> {
+    pub(crate) fn new(work: BoxedWork<Err>, id: TaskId, priority: u32) -> Self {
         Self {
+            id,
             name: None,
             priority,
             work: Mutex::new(Some(work)),
+            failed: false.into()
         }
     }
 
-    pub(crate) fn run(&self) -> Result<(), TaskExecutionError> {
-        let mut work = self.work.lock()?;
-        (work.take().unwrap())();
+    pub(crate) fn run(&self) -> Result<(), TaskExecutionError<Err>> {
+        let mut work = self.work.lock()
+            .map_err(|_| TaskExecutionError::LockPoisonedError(self.id))?;
+        if let Err(err) = (work.take().unwrap())() {
+            self.failed.store(true, Ordering::Relaxed);
+            return Err(TaskExecutionError::Err(self.id, err))
+        }
 
         Ok(())
+    }
+
+    pub(crate) fn cancel(&self) {
+        self.failed.store(true, Ordering::Relaxed);
+    }
+
+    pub(crate) fn id(&self) -> TaskId {
+        self.id
     }
 }
 
 #[derive(Debug)]
-pub enum TaskExecutionError {
-    LockPoisonedError
+pub enum TaskExecutionError<Err> {
+    LockPoisonedError(TaskId),
+    Err(TaskId, Err),
+    Cancelled(TaskId)
 }
 
-impl<T> From<PoisonError<T>> for TaskExecutionError {
-    fn from(_: PoisonError<T>) -> Self {
-        Self::LockPoisonedError
-    }
-}
+impl<Err: std::fmt::Debug> std::error::Error for TaskExecutionError<Err> {}
 
-impl std::error::Error for TaskExecutionError {}
-
-impl std::fmt::Display for TaskExecutionError {
+impl<Err: std::fmt::Debug> std::fmt::Display for TaskExecutionError<Err> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!("{:?}", self))
     }
 }
-
-// #[derive(Clone)]
-// pub struct TaskHandle {
-//     pub(crate) id: TaskId,
-//     pub(crate) state: Arc<Mutex<Option<SharedState>>>
-// }
-
-// impl TaskHandle {
-//     pub fn precede(&self, other: &TaskHandle) -> Result<(), SchedulerError> {
-//         let mut state = self.state.lock()?;
-//         state.add_dependency(self.id, other.id);
-//         Ok(())
-//     }
-
-//     pub fn succeed(&self, other: &TaskHandle) -> Result<(), SchedulerError> {
-//         let mut state = self.state.lock()?;
-//         state.add_dependency(other.id, self.id);
-//         Ok(())
-//     }
-
-//     pub fn set_priority(&self, priority: u32) -> Result<(), SchedulerError> {
-//         let mut state = self.state.lock()?;
-//         state.tasks.get_mut(&self.id).unwrap().priority = priority;
-//         Ok(())
-//     }
-
-//     pub fn priority(&self) -> Result<u32, SchedulerError> {
-//         let state = self.state.lock()?;
-//         Ok(state.tasks[&self.id].priority)
-//     }
-
-//     pub fn set_name(&self, name: impl Into<String>) -> Result<(), SchedulerError> {
-//         let mut state = self.state.lock()?;
-//         state.tasks.get_mut(&self.id).unwrap().name = Some(name.into());
-//         Ok(())
-//     }
-
-//     pub fn name(&self) -> Result<Option<String>, SchedulerError> {
-//         let state = self.state.lock()?;
-//         Ok(state.tasks[&self.id].name.clone())
-//     }
-// }
-
-// impl fmt::Debug for TaskHandle {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.debug_struct("TaskHandle").field("id", &self.id).finish()
-//     }
-// }

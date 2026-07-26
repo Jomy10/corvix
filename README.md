@@ -45,3 +45,5 @@ fn main() {
 2
 4
 ```
+
+More examples in the [examples folder](/examples).

@@ -3,22 +3,26 @@ use std::time::Duration;
 use corvix::{Executor, Scheduler};
 
 fn main() {
-    let mut scheduler = Scheduler::new();
+    let mut scheduler = Scheduler::<()>::new();
     let _1 = scheduler.add_task(|| {
         println!("1");
+        Ok(())
     }).unwrap();
 
     let _2 = scheduler.add_task(|| {
         println!("2");
+        Ok(())
     }).unwrap();
 
     let _3 = scheduler.add_task(|| {
         println!("3");
+        Ok(())
     }).unwrap();
 
     let _4 = scheduler.add_task(|| {
-        std::thread::sleep(Duration::new(3, 0));
+        std::thread::sleep(Duration::new(2, 0));
        println!("4");
+       Ok(())
     }).unwrap();
 
     scheduler.add_dependency(_2, _1);

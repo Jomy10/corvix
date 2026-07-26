@@ -3,17 +3,18 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use itertools::Itertools;
+use log::trace;
 use petgraph::graphmap::DiGraphMap;
 use uuid::Uuid;
 
-use crate::{ExecutorError, Task, TaskId};
+use crate::{ExecutionError, Task, TaskExecutionError, TaskId};
 
-pub struct Scheduler {
-    pub(crate) tasks: HashMap<TaskId, Task>,
+pub struct Scheduler<Err> {
+    pub(crate) tasks: HashMap<TaskId, Task<Err>>,
     pub(crate) dag: DiGraphMap<Uuid, ()>,
 }
 
-impl Scheduler {
+impl<Err> Scheduler<Err> {
     pub fn new() -> Self {
         Self {
             tasks: HashMap::new(),
@@ -21,17 +22,17 @@ impl Scheduler {
         }
     }
 
-    pub fn add_task(&mut self, work: impl FnOnce() + Send + Sync + 'static) -> Result<TaskId, SchedulerError> {
+    pub fn add_task(&mut self, work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static) -> Result<TaskId, SchedulerError> {
         return self.add_task_with_priority(work, 0);
     }
 
     pub fn add_task_with_priority(&mut self,
-        work: impl FnOnce() + Send + Sync + 'static,
+        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
         priority: u32
     ) -> Result<TaskId, SchedulerError> {
         let id = Uuid::new_v4();
 
-        let task = Task::new(Box::new(work), priority);
+        let task = Task::new(Box::new(work), id, priority);
 
         self.tasks.insert(id, task);
         self.dag.add_node(id);
@@ -48,12 +49,12 @@ impl Scheduler {
         task.priority = priority;
     }
 
-    pub(crate) fn create_instance(self) -> Result<SchedulerInstance, SchedulerError> {
+    pub(crate) fn create_instance(self, fail_fast: bool) -> Result<SchedulerInstance<Err>, SchedulerError> {
         if petgraph::algo::is_cyclic_directed(&self.dag) {
             return Err(SchedulerError::CyclicalDependency);
         }
 
-        return Ok(SchedulerInstance::new(self));
+        return Ok(SchedulerInstance::new(self, fail_fast));
     }
 }
 
@@ -77,8 +78,8 @@ impl std::fmt::Display for SchedulerError {
     }
 }
 
-pub(crate) struct SchedulerInstance {
-    scheduler: Scheduler,
+pub(crate) struct SchedulerInstance<Err> {
+    scheduler: Scheduler<Err>,
     // Priorities in descending order
     priorities: Vec<u32>,
     // Nodes which have all their dependencies resolved, grouped by priority
@@ -87,10 +88,11 @@ pub(crate) struct SchedulerInstance {
     total_nodes: usize,
     count_completed: AtomicUsize,
     signal: Condvar,
+    fail_fast: bool
 }
 
-impl SchedulerInstance {
-    fn new(scheduler: Scheduler) -> Self {
+impl<Err> SchedulerInstance<Err> {
+    fn new(scheduler: Scheduler<Err>, fail_fast: bool) -> Self {
         let priorities = scheduler.tasks.values()
             .map(|n| n.priority)
             .unique()
@@ -119,6 +121,7 @@ impl SchedulerInstance {
             total_nodes,
             count_completed: 0.into(),
             signal: Condvar::new(),
+            fail_fast
         }
     }
 
@@ -142,7 +145,7 @@ impl SchedulerInstance {
         }
     }
 
-    fn complete_task(&self, id: &TaskId) -> Result<(), ExecutorError> {
+    fn complete_task(&self, id: &TaskId) -> Result<(), SchedulerError> {
         let descendants = self.scheduler.dag.neighbors_directed(*id, petgraph::Direction::Outgoing);
         let nodes = descendants
             .map(|desc| (
@@ -151,7 +154,7 @@ impl SchedulerInstance {
                 self.scheduler.dag.neighbors_directed(desc, petgraph::Direction::Incoming)
             ));
 
-        let mut completed_nodes = self.completed_nodes.lock().map_err(|err| SchedulerError::from(err))?;
+        let mut completed_nodes = self.completed_nodes.lock()?;
         completed_nodes.insert(*id);
 
         let nodes = nodes
@@ -169,7 +172,7 @@ impl SchedulerInstance {
         drop(completed_nodes);
 
         // Add newly available nodes to accessible_nodes
-        let mut accessible_nodes = self.accessible_nodes.lock().map_err(|err| SchedulerError::from(err))?;
+        let mut accessible_nodes = self.accessible_nodes.lock()?;
         let nodes_count = nodes.len();
         for (descendant, task) in nodes {
             accessible_nodes.get_mut(&task.priority)
@@ -186,11 +189,35 @@ impl SchedulerInstance {
         Ok(())
     }
 
-    pub(crate) fn execute_task(&self, id: &TaskId) -> Result<(), ExecutorError> {
+    fn execute_task_impl(&self, id: &TaskId) -> Result<(), ExecutionError<Err>> {
+        let should_cancel = self.scheduler.dag
+            .neighbors_directed(*id, petgraph::Direction::Incoming)
+            .find(|dep| self.scheduler.tasks[dep].failed.load(Ordering::Relaxed))
+            .is_some();
         let task = &self.scheduler.tasks[&id];
+
+        if should_cancel {
+            trace!("Task {id} cancelled");
+            if self.fail_fast {
+                return Ok(());
+            } else {
+                task.cancel();
+                return Err(TaskExecutionError::Cancelled(task.id()).into())
+            }
+        }
+
         task.run()?;
 
-        self.complete_task(id)?;
+        Ok(())
+    }
+
+    pub(crate) fn execute_task(&self, id: &TaskId) -> Result<(), ExecutionError<Err>> {
+        if let Err(err) = self.execute_task_impl(id) {
+            self.complete_task(id)?;
+            return Err(err);
+        } else {
+            self.complete_task(id)?;
+        }
 
         Ok(())
     }
