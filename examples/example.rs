@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use batcher::{Executor, Scheduler};
+use corvix::{Executor, Scheduler};
 
 fn main() {
     let mut scheduler = Scheduler::new();

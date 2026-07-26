@@ -1,6 +1,6 @@
 <div align="center">
-  <h1>Batcher</h1>
-  <p>A task scheduler with priority support</p>
+  <h1>Corvix</h1>
+  <p>A task scheduler with dependency and priority support</p>
 </div><br/>
 
 ## Example
