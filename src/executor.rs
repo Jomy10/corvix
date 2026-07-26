@@ -112,6 +112,10 @@ impl<Err> ExecutorFuture<Err> {
             Ok(())
         }
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.worker_handles.iter().find(|h| !h.is_finished()).is_none()
+    }
 }
 
 #[derive(Debug)]
@@ -154,6 +158,10 @@ impl<Err> ExecutorFailFastFuture<Err> {
 
         Ok(())
     }
+
+    pub fn is_finished(&self) -> bool {
+        self.worker_handles.iter().find(|h| !h.is_finished()).is_none()
+    }
 }
 
 #[derive(Debug)]
@@ -185,41 +193,6 @@ impl<Err: std::fmt::Debug> std::fmt::Display for ExecutorFailFastFutureError<Err
 }
 
 impl<Err: std::fmt::Debug> std::error::Error for ExecutorFailFastFutureError<Err> {}
-
-// pub struct ExecutorFuture<Err, RetErr> {
-//     worker_handles: Vec<JoinHandle<Result<(), Err>>>,
-// }
-
-// impl<Err, RetErr> ExecutorFuture<Err, RetErr> {
-//     pub fn wait(self) -> Result<(), ExecutorFutureError<RetErr>> {
-//         for handle in self.worker_handles {
-//             handle.join().map_err(|err| ExecutorFutureError::JoinError(err))??;
-//         }
-
-//         Ok(())
-//     }
-
-//     pub fn is_running(&self) -> bool {
-//         for handle in &self.worker_handles {
-//             if !handle.is_finished() {
-//                 return true;
-//             }
-//         }
-//         return false;
-//     }
-// }
-
-// #[derive(Debug)]
-// pub enum ExecutorFutureError<Err> {
-//     TaskExecutionError(Err),
-//     JoinError(Box<dyn Any + Send>),
-// }
-
-// impl<Err> From<Err> for ExecutorFutureError<Err> {
-//     fn from(value: Err) -> Self {
-//         Self::TaskExecutionError(value)
-//     }
-// }
 
 #[derive(Debug)]
 pub enum ExecutionError<Err> {
