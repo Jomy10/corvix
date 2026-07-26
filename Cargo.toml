@@ -2,6 +2,13 @@
 name = "batcher"
 version = "0.1.0"
 edition = "2024"
+authors = ["Jonas Everaert"]
+description = "A task scheduler with priorities support"
+repository = "https://github.com/jomy10/batcher"
+license = "MIT"
+license-file = "LICENSE"
+keywords = ["scheduler", "framework", "priority", "queue", "task"]
+categories = ["concurrency"]
 
 [dependencies]
 itertools = "0.15.0"
