@@ -65,10 +65,16 @@ impl<Err> Scheduler<Err> {
         return Ok(id);
     }
 
+    /// Add a dependency to the scheduler.
+    ///
+    /// Tasks depending on other tasks will not execute before all of their dependencies
+    /// have finished executing.
     pub fn add_dependency(&mut self, node: TaskId, depends_on: TaskId) {
         self.dag.add_edge(depends_on, node, ());
     }
 
+    /// Change the priority of a task. Tasks with a higher priority will be scheduled
+    /// before tasks with a lower priority
     pub fn change_priority(&mut self, task_id: TaskId, priority: u32) {
         let task = self.tasks.get_mut(&task_id).unwrap();
         task.priority = priority;
@@ -145,6 +151,7 @@ impl<Err> Scheduler<Err> {
         }
     }
 
+    /// Consumes the `Scheduler` and makes it ready for execution
     pub(crate) fn create_instance(self, fail_fast: bool) -> Result<SchedulerInstance<Err>, SchedulerError> {
         if petgraph::algo::is_cyclic_directed(&self.dag) {
             return Err(SchedulerError::CyclicalDependency);
@@ -156,7 +163,9 @@ impl<Err> Scheduler<Err> {
 
 #[derive(Debug)]
 pub enum SchedulerError {
+    /// A lock failed due to a `std::sync::poison::PoisonError`
     PoisonError,
+    /// A cyclical dependency was found in the scheduler
     CyclicalDependency,
 }
 

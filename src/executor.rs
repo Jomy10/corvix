@@ -99,6 +99,7 @@ pub struct ExecutorFuture<Err> {
 }
 
 impl<Err> ExecutorFuture<Err> {
+    /// Block the current thread until execution has stopped
     pub fn wait(self) -> Result<(), ExecutorFutureError<Err>> {
         for handle in self.worker_handles {
             handle.join()??;
@@ -113,6 +114,7 @@ impl<Err> ExecutorFuture<Err> {
         }
     }
 
+    /// Check if all workers have finished
     pub fn is_finished(&self) -> bool {
         self.worker_handles.iter().find(|h| !h.is_finished()).is_none()
     }

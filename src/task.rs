@@ -54,7 +54,9 @@ impl<Err> Task<Err> {
 #[derive(Debug)]
 pub enum TaskExecutionError<Err> {
     LockPoisonedError(TaskId),
+    /// Error thrown from the actual task
     Err(TaskId, Err),
+    /// Task was cancelled because one of their dependencies failed or was also cancelled
     Cancelled(TaskId)
 }
 
