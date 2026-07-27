@@ -13,6 +13,12 @@ pub struct Executor {
 }
 
 impl Executor {
+    /// An executor executes the tasks defined in a `Scheduler`, based on the
+    /// dependencies and priorities.
+    ///
+    /// # Params
+    /// - `num_workers`: When passed, sets the amount of worker threads to spawn.
+    ///   Defaults to the available CPU's (`std::thread::available_parallelism`).
     pub fn new(num_workers: Option<NonZero<usize>>) -> Self {
         let nproc = num_workers
             .unwrap_or(std::thread::available_parallelism().unwrap_or(NonZero::new(3usize).unwrap()));
@@ -122,8 +128,11 @@ impl<Err> ExecutorFuture<Err> {
 
 #[derive(Debug)]
 pub enum ExecutorFutureError<Err> {
+    /// Error during scheduling of tasks
     SchedulerError(SchedulerError),
+    /// Error happened during task execution
     TaskExecutionError(Vec<TaskExecutionError<Err>>),
+    /// Error happened in `wait` while joining the worker threads
     JoinError(Box<dyn Any + Send>),
 }
 

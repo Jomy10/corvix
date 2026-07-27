@@ -17,6 +17,9 @@ pub struct Scheduler<Err> {
 }
 
 impl<Err> Scheduler<Err> {
+    /// The scheduler is in charge of determining which task the `Executor` should
+    /// execute next. Tasks can be submitted using `add_task*` functions. Dependencies
+    /// between tasks can be added using `add_dependency`.
     pub fn new() -> Self {
         Self {
             tasks: HashMap::new(),
@@ -88,6 +91,9 @@ impl<Err> Scheduler<Err> {
 
     /// Creates a new graph with names instead of id's, which is more suited
     /// for visualization using `petgraph::dot::Dot`.
+    ///
+    /// When feature `rayon` is enabled, this function will iterate over the
+    /// nodes and edges in parallel, speeding up computation of the new graph.
     pub fn graph_with_names(&self) -> DiGraph<Cow<'_, str>, ()> {
         #[cfg(feature = "rayon")]
         {
