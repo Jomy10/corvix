@@ -10,6 +10,7 @@ use crate::{Scheduler, SchedulerError, SchedulerInstance, TaskExecutionError};
 
 pub struct Executor {
     num_workers: NonZero<usize>,
+    on_task_finish: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 }
 
 impl Executor {
@@ -25,6 +26,7 @@ impl Executor {
 
         Executor {
             num_workers: nproc,
+            on_task_finish: None
         }
     }
 
@@ -39,9 +41,10 @@ impl Executor {
             let task_queue = task_queue.clone();
             let errs = errs.clone();
             let cancel = cancel.clone();
+            let on_task_finish = self.on_task_finish.as_ref().map(|f| f.clone());
             thread::spawn(move || {
                 loop {
-                    match Self::worker_impl(&task_queue, &cancel) {
+                    match Self::worker_impl(&task_queue, &cancel, on_task_finish) {
                         Ok(()) => return Ok(()),
                         Err(err) => match err {
                             ExecutionError::SchedulerError(scheduler_error) => {
@@ -71,15 +74,16 @@ impl Executor {
         let handles = (0_usize..self.num_workers.get()).map(|_worker_id| {
             let task_queue = task_queue.clone();
             let cancel = cancel.clone();
+            let on_task_finish = self.on_task_finish.as_ref().map(|f| f.clone());
             thread::spawn(move || {
-                Self::worker_impl(&task_queue, &cancel)
+                Self::worker_impl(&task_queue, &cancel, on_task_finish)
             })
         }).collect::<Vec<_>>();
 
         return Ok(ExecutorFailFastFuture { worker_handles: handles })
     }
 
-    fn worker_impl<Err>(task_queue: &SchedulerInstance<Err>, cancel: &AtomicBool) -> Result<(), ExecutionError<Err>> {
+    fn worker_impl<Err>(task_queue: &SchedulerInstance<Err>, cancel: &AtomicBool, on_finish: Option<Arc<dyn Fn() + Send + Sync + 'static>>) -> Result<(), ExecutionError<Err>> {
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(())
@@ -94,6 +98,10 @@ impl Executor {
             task_queue.execute_task(&task_id)?;
 
             trace!("Completed task {task_id}");
+
+            if let Some(on_finish) = &on_finish {
+                on_finish()
+            }
         }
     }
 }
