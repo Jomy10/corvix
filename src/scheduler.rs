@@ -7,6 +7,8 @@ use itertools::Itertools;
 use petgraph::graph::DiGraph;
 use petgraph::graphmap::DiGraphMap;
 use uuid::Uuid;
+#[cfg(feature = "log")]
+use log::*;
 
 use crate::{ExecutionError, Task, TaskExecutionError, TaskId};
 
@@ -307,13 +309,21 @@ impl<Err> SchedulerInstance<Err> {
         let task = &self.scheduler.tasks[&id];
 
         if should_cancel {
-            trace!("Task {id} cancelled");
-            if self.fail_fast {
-                return Ok(());
-            } else {
+            #[cfg(all(feature = "log", not(feature = "log-names")))] {
+                trace!("Task {id} cancelled");
+            }
+            #[cfg(all(feature = "log", feature = "log-names"))] {
+                use std::borrow::Cow;
+                let task_name = self.node_name(&id).map(|v| Cow::Borrowed(v)).unwrap_or(Cow::Owned(id.to_string()));
+                trace!("Task {} cancelled", task_name);
+            }
+
+            // if self.fail_fast {
+            //     return Ok(());
+            // } else {
                 task.cancel();
                 return Err(TaskExecutionError::Cancelled(task.id()).into())
-            }
+            // }
         }
 
         task.run()?;
@@ -323,12 +333,26 @@ impl<Err> SchedulerInstance<Err> {
 
     pub(crate) fn execute_task(&self, id: &TaskId) -> Result<(), ExecutionError<Err>> {
         if let Err(err) = self.execute_task_impl(id) {
+            #[cfg(feature = "log")] {
+                error!("Task errored {:?}", self.scheduler.tasks[id].name());
+            }
+            if self.fail_fast {
+                self.count_completed.store(self.total_nodes, Ordering::Relaxed);
+            }
             self.complete_task(id)?;
             return Err(err);
         } else {
+            #[cfg(feature = "log")] {
+                info!("Task succeeded {:?}", self.scheduler.tasks[id].name());
+            }
             self.complete_task(id)?;
         }
 
         Ok(())
+    }
+
+    #[cfg(feature = "log")]
+    pub(crate) fn node_name(&self, id: &TaskId) -> Option<&str> {
+        self.scheduler.tasks[id].name()
     }
 }

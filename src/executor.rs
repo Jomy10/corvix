@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
+#[cfg(feature = "log")]
 use log::*;
 
 use crate::{Scheduler, SchedulerError, SchedulerInstance, TaskExecutionError};
@@ -71,6 +72,7 @@ impl Executor {
                 match res {
                     Ok(res) => res,
                     Err(err) => {
+                        cancel.store(true, Ordering::Relaxed);
                         let mut errs = errs.lock()?;
                         errs.push(TaskExecutionError::Panic(err));
                         Ok(())
@@ -99,8 +101,14 @@ impl Executor {
                 }));
 
                 match res {
-                    Ok(res) => res,
+                    Ok(res) => {
+                        if res.is_err() {
+                            cancel.store(true, Ordering::Relaxed);
+                        }
+                        res
+                    },
                     Err(err) => {
+                        cancel.store(true, Ordering::Relaxed);
                         Err(ExecutionError::TaskExecutionError(TaskExecutionError::Panic(err)))
                     },
                 }
@@ -120,11 +128,28 @@ impl Executor {
                 return Ok(());
             };
 
-            trace!("Starting task {}", task_id);
+            #[cfg(feature = "log")]
+            {
+                let log_name = {
+                    #[cfg(not(feature = "log-names"))] {
+                        task_id
+                    }
+                    #[cfg(feature = "log-names")] {
+                        use std::borrow::Cow;
+                        task_queue.node_name(&task_id).map(|v| Cow::Borrowed(v)).unwrap_or(Cow::Owned(task_id.to_string()))
+                    }
+                };
 
-            task_queue.execute_task(&task_id)?;
+                trace!("Starting task {log_name}");
 
-            trace!("Completed task {task_id}");
+                task_queue.execute_task(&task_id)?;
+
+                trace!("Completed task {log_name}");
+            }
+            #[cfg(not(feature = "log"))] {
+                task_queue.execute_task(&task_id)?;
+            }
+
 
             if let Some(on_finish) = &on_finish {
                 on_finish()
