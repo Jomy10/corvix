@@ -1,5 +1,6 @@
 use std::any::Any;
 use std::num::NonZero;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -30,6 +31,12 @@ impl Executor {
         }
     }
 
+    /// Execute an arbitrary function when a task is finished. Can for example be
+    /// used with `indicatif` for a incrementing a progressbar.
+    pub fn set_on_task_finish(&mut self, on_task_finish: impl Fn() + Send + Sync + 'static) {
+        self.on_task_finish = Some(Arc::new(on_task_finish))
+    }
+
     /// Run all the submitted tasks in `scheduler`. When an error occurrs,
     /// the dependants of the node will be cancelled, while the other tasks will continue.
     pub fn run<Err: Send + 'static>(&self, scheduler: Scheduler<Err>) -> Result<ExecutorFuture<Err>, SchedulerError> {
@@ -43,19 +50,30 @@ impl Executor {
             let cancel = cancel.clone();
             let on_task_finish = self.on_task_finish.as_ref().map(|f| f.clone());
             thread::spawn(move || {
-                loop {
-                    match Self::worker_impl(&task_queue, &cancel, on_task_finish) {
-                        Ok(()) => return Ok(()),
-                        Err(err) => match err {
-                            ExecutionError::SchedulerError(scheduler_error) => {
-                                cancel.store(true, Ordering::Relaxed);
-                                return Err(scheduler_error)
+                let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    loop {
+                        match Self::worker_impl(&task_queue, &cancel, on_task_finish.as_ref()) {
+                            Ok(()) => return Ok(()),
+                            Err(err) => match err {
+                                ExecutionError::SchedulerError(scheduler_error) => {
+                                    cancel.store(true, Ordering::Relaxed);
+                                    return Err(scheduler_error)
+                                },
+                                ExecutionError::TaskExecutionError(task_execution_error) => {
+                                    let mut errs = errs.lock()?;
+                                    errs.push(task_execution_error);
+                                },
                             },
-                            ExecutionError::TaskExecutionError(task_execution_error) => {
-                                let mut errs = errs.lock()?;
-                                errs.push(task_execution_error);
-                            },
-                        },
+                        }
+                    }
+                }));
+
+                match res {
+                    Ok(res) => res,
+                    Err(err) => {
+                        let mut errs = errs.lock()?;
+                        errs.push(TaskExecutionError::Panic(err));
+                        Ok(())
                     }
                 }
             })
@@ -76,14 +94,23 @@ impl Executor {
             let cancel = cancel.clone();
             let on_task_finish = self.on_task_finish.as_ref().map(|f| f.clone());
             thread::spawn(move || {
-                Self::worker_impl(&task_queue, &cancel, on_task_finish)
+                let res = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    Self::worker_impl(&task_queue, &cancel, on_task_finish.as_ref())
+                }));
+
+                match res {
+                    Ok(res) => res,
+                    Err(err) => {
+                        Err(ExecutionError::TaskExecutionError(TaskExecutionError::Panic(err)))
+                    },
+                }
             })
         }).collect::<Vec<_>>();
 
         return Ok(ExecutorFailFastFuture { worker_handles: handles })
     }
 
-    fn worker_impl<Err>(task_queue: &SchedulerInstance<Err>, cancel: &AtomicBool, on_finish: Option<Arc<dyn Fn() + Send + Sync + 'static>>) -> Result<(), ExecutionError<Err>> {
+    fn worker_impl<Err>(task_queue: &SchedulerInstance<Err>, cancel: &AtomicBool, on_finish: Option<&Arc<dyn Fn() + Send + Sync + 'static>>) -> Result<(), ExecutionError<Err>> {
         loop {
             if cancel.load(Ordering::Relaxed) {
                 return Ok(())

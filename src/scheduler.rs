@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 
 use itertools::Itertools;
-use log::trace;
 use petgraph::graph::DiGraph;
 use petgraph::graphmap::DiGraphMap;
 use uuid::Uuid;

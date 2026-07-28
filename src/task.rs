@@ -1,3 +1,5 @@
+use std::any::Any;
+use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
@@ -51,13 +53,25 @@ impl<Err> Task<Err> {
     }
 }
 
+impl<Err> Debug for Task<Err> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Task")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("priority", &self.priority)
+            .field("failed", &self.failed)
+            .finish()
+    }
+}
+
 #[derive(Debug)]
 pub enum TaskExecutionError<Err> {
     LockPoisonedError(TaskId),
     /// Error thrown from the actual task
     Err(TaskId, Err),
     /// Task was cancelled because one of their dependencies failed or was also cancelled
-    Cancelled(TaskId)
+    Cancelled(TaskId),
+    Panic(Box<dyn Any + Send>)
 }
 
 impl<Err: std::fmt::Debug> std::error::Error for TaskExecutionError<Err> {}
