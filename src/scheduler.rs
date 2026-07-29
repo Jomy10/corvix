@@ -334,7 +334,7 @@ impl<Err> SchedulerInstance<Err> {
     pub(crate) fn execute_task(&self, id: &TaskId) -> Result<(), ExecutionError<Err>> {
         if let Err(err) = self.execute_task_impl(id) {
             #[cfg(feature = "log")] {
-                error!("Task errored {:?}", self.scheduler.tasks[id].name());
+                error!("Task errored {}", self.scheduler.tasks[id].name().map(Cow::from).unwrap_or(id.to_string().into()));
             }
             if self.fail_fast {
                 self.count_completed.store(self.total_nodes, Ordering::Relaxed);
@@ -343,7 +343,7 @@ impl<Err> SchedulerInstance<Err> {
             return Err(err);
         } else {
             #[cfg(feature = "log")] {
-                info!("Task succeeded {:?}", self.scheduler.tasks[id].name());
+                info!("Task succeeded {}", self.scheduler.tasks[id].name().map(Cow::from).unwrap_or(id.to_string().into()));
             }
             self.complete_task(id)?;
         }

@@ -102,7 +102,14 @@ impl Executor {
 
                 match res {
                     Ok(res) => {
-                        if res.is_err() {
+                        if let Err(err) = &res {
+                            match err {
+                                ExecutionError::SchedulerError(_) => {},
+                                ExecutionError::TaskExecutionError(task_execution_error) => match task_execution_error {
+                                    TaskExecutionError::Cancelled(_) => return Ok(()),
+                                    _ => {}
+                                },
+                            }
                             cancel.store(true, Ordering::Relaxed);
                         }
                         res
