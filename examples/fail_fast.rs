@@ -1,7 +1,7 @@
 use std::thread::sleep;
 use std::time::Duration;
 
-use corvix::{Executor, Scheduler};
+use corvix::{AddTaskDescriptor, Executor, Scheduler};
 
 #[derive(Debug)]
 struct MyError {}
@@ -11,28 +11,28 @@ fn main() {
     let _1 = scheduler.add_task(|| {
         println!("1");
         Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _2 = scheduler.add_task(|| {
         println!("2");
         Err(MyError{})
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _3 = scheduler.add_task(|| {
        println!("3");
        Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _4 = scheduler.add_task(|| {
        println!("4");
        Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _5 = scheduler.add_task(|| {
         sleep(Duration::from_secs(1));
        println!("5");
        Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     scheduler.add_dependency(_2, _1);
     scheduler.add_dependency(_5, _1);

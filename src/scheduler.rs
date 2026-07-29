@@ -12,6 +12,12 @@ use log::*;
 
 use crate::{ExecutionError, Task, TaskExecutionError, TaskId};
 
+#[derive(Default)]
+pub struct AddTaskDescriptor {
+    pub name: Option<String>,
+    pub priority: u32
+}
+
 pub struct Scheduler<Err> {
     pub(crate) tasks: HashMap<TaskId, Task<Err>>,
     pub(crate) dag: DiGraphMap<Uuid, ()>,
@@ -28,30 +34,8 @@ impl<Err> Scheduler<Err> {
         }
     }
 
-    pub fn add_task(&mut self, work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static) -> Result<TaskId, SchedulerError> {
-        return self.add_task_impl(work, None, 0);
-    }
-
-    pub fn add_task_with_priority(&mut self,
-        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
-        priority: u32
-    ) -> Result<TaskId, SchedulerError> {
-        self.add_task_impl(work, None, priority)
-    }
-
-    pub fn add_task_with_name(&mut self,
-        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
-        name: impl Into<String>,
-    ) -> Result<TaskId, SchedulerError> {
-        self.add_task_impl(work, Some(name.into()), 0)
-    }
-
-    pub fn add_task_with_name_and_priority(&mut self,
-        work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
-        name: impl Into<String>,
-        priority: u32
-    ) -> Result<TaskId, SchedulerError> {
-        self.add_task_impl(work, Some(name.into()), priority)
+    pub fn add_task(&mut self, work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static, desc: AddTaskDescriptor) -> Result<TaskId, SchedulerError> {
+        return self.add_task_impl(work, desc.name, desc.priority);
     }
 
     fn add_task_impl(&mut self,

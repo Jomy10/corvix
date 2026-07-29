@@ -1,29 +1,29 @@
 use std::time::Duration;
 
-use corvix::{Executor, Scheduler};
+use corvix::{AddTaskDescriptor, Executor, Scheduler};
 
 fn main() {
     let mut scheduler = Scheduler::<()>::new();
     let _1 = scheduler.add_task(|| {
         println!("1");
         Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _2 = scheduler.add_task(|| {
         println!("2");
         Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _3 = scheduler.add_task(|| {
         println!("3");
         Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     let _4 = scheduler.add_task(|| {
         std::thread::sleep(Duration::new(2, 0));
        println!("4");
        Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
 
     scheduler.add_dependency(_2, _1);
     scheduler.add_dependency(_2, _3);

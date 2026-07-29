@@ -1,27 +1,36 @@
-use corvix::{Executor, Scheduler};
+use corvix::{AddTaskDescriptor, Executor, Scheduler};
 
 fn main() {
     let mut scheduler = Scheduler::<()>::new();
-    let _1 = scheduler.add_task_with_priority(|| {
+    let _1 = scheduler.add_task(|| {
         println!("1");
         Ok(())
-    }, 1).unwrap();
+    }, AddTaskDescriptor {
+        priority: 1,
+        ..Default::default()
+    }).unwrap();
 
     let _2 = scheduler.add_task(|| {
         println!("2");
         Ok(())
-    }).unwrap();
+    }, AddTaskDescriptor::default()).unwrap();
     scheduler.change_priority(_2, 2);
 
-    let _3 = scheduler.add_task_with_priority(|| {
+    let _3 = scheduler.add_task(|| {
         println!("3");
         Ok(())
-    }, 3).unwrap();
+    }, AddTaskDescriptor {
+        priority: 3,
+        ..Default::default()
+    }).unwrap();
 
-    let _4 = scheduler.add_task_with_priority(|| {
+    let _4 = scheduler.add_task(|| {
        println!("4");
        Ok(())
-    }, 4).unwrap();
+    }, AddTaskDescriptor {
+        priority: 4,
+        ..Default::default()
+    }).unwrap();
 
     // Run with one thread
     let executor = Executor::new(Some(1.try_into().unwrap()));
