@@ -1,7 +1,7 @@
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use uuid::Uuid;
 
@@ -15,7 +15,8 @@ pub(crate) struct Task<Err> {
     name: Option<String>,
     pub(crate) priority: u32,
     work: Mutex<Option<BoxedWork<Err>>>,
-    pub(crate) failed: AtomicBool
+    pub(crate) failed: AtomicBool,
+    pub(crate) can_start: Option<Arc<AtomicBool>>,
 }
 
 impl<Err> Task<Err> {
@@ -25,7 +26,8 @@ impl<Err> Task<Err> {
             name,
             priority,
             work: Mutex::new(Some(work)),
-            failed: false.into()
+            failed: false.into(),
+            can_start: None
         }
     }
 
@@ -35,10 +37,10 @@ impl<Err> Task<Err> {
 
     pub(crate) fn run(&self) -> Result<(), TaskExecutionError<Err>> {
         let mut work = self.work.lock()
-            .map_err(|_| TaskExecutionError::LockPoisonedError(self.id))?;
+            .map_err(|_| TaskExecutionError::LockPoisonedError(self.id, self.name.clone()))?;
         if let Err(err) = (work.take().unwrap())() {
             self.failed.store(true, Ordering::Relaxed);
-            return Err(TaskExecutionError::Err(self.id, err))
+            return Err(TaskExecutionError::Err(self.id, self.name.clone(), err))
         }
 
         Ok(())
@@ -50,6 +52,10 @@ impl<Err> Task<Err> {
 
     pub(crate) fn id(&self) -> TaskId {
         self.id
+    }
+
+    pub(crate) fn set_conditional(&mut self, can_start: Arc<AtomicBool>) {
+        self.can_start = Some(can_start);
     }
 }
 
@@ -66,11 +72,11 @@ impl<Err> Debug for Task<Err> {
 
 #[derive(Debug)]
 pub enum TaskExecutionError<Err> {
-    LockPoisonedError(TaskId),
+    LockPoisonedError(TaskId, Option<String>),
     /// Error thrown from the actual task
-    Err(TaskId, Err),
+    Err(TaskId, Option<String>, Err),
     /// Task was cancelled because one of their dependencies failed or was also cancelled
-    Cancelled(TaskId),
+    Cancelled(TaskId, Option<String>),
     Panic(Box<dyn Any + Send>)
 }
 

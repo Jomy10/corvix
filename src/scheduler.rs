@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use itertools::Itertools;
 use petgraph::graph::DiGraph;
@@ -12,15 +12,42 @@ use log::*;
 
 use crate::{ExecutionError, Task, TaskExecutionError, TaskId};
 
+#[derive(Debug, Clone)]
+pub struct Conditional {
+    condition: Arc<AtomicBool>,
+    signal: Option<Arc<Condvar>>
+}
+
+impl Conditional {
+    pub fn new() -> Self {
+        Self {
+            condition: Arc::new(false.into()),
+            signal: None
+        }
+    }
+
+    fn init(&mut self, condvar: Arc<Condvar>) {
+        self.signal = Some(condvar);
+    }
+
+    pub fn resolve(&self) {
+        self.condition.store(true, Ordering::Relaxed);
+        self.signal.as_ref().expect("Conditional used before being initialized").notify_all();
+    }
+}
+
 #[derive(Default)]
-pub struct AddTaskDescriptor {
+pub struct AddTaskDescriptor<'a> {
     pub name: Option<String>,
-    pub priority: u32
+    pub priority: u32,
+    /// Provide a conditional to the task. The task will only start when the variable is set to true
+    pub condition: Option<&'a mut Conditional>
 }
 
 pub struct Scheduler<Err> {
     pub(crate) tasks: HashMap<TaskId, Task<Err>>,
     pub(crate) dag: DiGraphMap<Uuid, ()>,
+    signal: Arc<Condvar>
 }
 
 impl<Err> Scheduler<Err> {
@@ -30,22 +57,29 @@ impl<Err> Scheduler<Err> {
     pub fn new() -> Self {
         Self {
             tasks: HashMap::new(),
-            dag: DiGraphMap::new()
+            dag: DiGraphMap::new(),
+            signal: Arc::new(Condvar::new())
         }
     }
 
     pub fn add_task(&mut self, work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static, desc: AddTaskDescriptor) -> Result<TaskId, SchedulerError> {
-        return self.add_task_impl(work, desc.name, desc.priority);
+        return self.add_task_impl(work, desc.name, desc.priority, desc.condition);
     }
 
     fn add_task_impl(&mut self,
         work: impl FnOnce() -> Result<(), Err> + Send + Sync + 'static,
         name: Option<String>,
-        priority: u32
+        priority: u32,
+        conditional: Option<&mut Conditional>
     ) -> Result<TaskId, SchedulerError> {
         let id = Uuid::new_v4();
 
-        let task = Task::new(Box::new(work), id, priority, name);
+        let mut task = Task::new(Box::new(work), id, priority, name);
+
+        if let Some(conditional) = conditional {
+            task.set_conditional(conditional.condition.clone());
+            conditional.init(self.signal.clone());
+        }
 
         self.tasks.insert(id, task);
         self.dag.add_node(id);
@@ -180,10 +214,11 @@ pub(crate) struct SchedulerInstance<Err> {
     priorities: Vec<u32>,
     // Nodes which have all their dependencies resolved, grouped by priority
     accessible_nodes: Mutex<HashMap<u32, VecDeque<TaskId>>>,
+    accessible_waiting_on_condition: Mutex<HashMap<u32, Vec<TaskId>>>,
+    nodes_waiting_on_condition: AtomicUsize,
     completed_nodes: Mutex<HashSet<TaskId>>,
     total_nodes: usize,
     count_completed: AtomicUsize,
-    signal: Condvar,
     fail_fast: bool
 }
 
@@ -196,14 +231,26 @@ impl<Err> SchedulerInstance<Err> {
             .collect::<Vec<u32>>();
 
         let mut accessible_nodes: HashMap<u32, VecDeque<Uuid>> = HashMap::new();
+        let mut accessible_waiting_on_condition: HashMap<u32, Vec<Uuid>> = HashMap::new();
         for priority in &priorities {
             accessible_nodes.insert(*priority, VecDeque::new());
+            accessible_waiting_on_condition.insert(*priority, Vec::new());
         }
 
+        let mut nodes_waiting = 0_usize;
         for node in scheduler.tasks.keys() {
             let priority = scheduler.tasks[node].priority;
             if scheduler.dag.neighbors_directed(*node, petgraph::Direction::Incoming).next() == None {
-                accessible_nodes.get_mut(&priority).unwrap().push_front(*node);
+                if let Some(can_start) = &scheduler.tasks[node].can_start {
+                    if can_start.load(Ordering::Relaxed) {
+                        accessible_nodes.get_mut(&priority).unwrap().push_front(*node);
+                    } else {
+                        accessible_waiting_on_condition.get_mut(&priority).unwrap().push(*node);
+                        nodes_waiting += 1;
+                    }
+                } else {
+                    accessible_nodes.get_mut(&priority).unwrap().push_front(*node);
+                }
             }
         }
 
@@ -213,10 +260,11 @@ impl<Err> SchedulerInstance<Err> {
             scheduler: scheduler,
             priorities,
             accessible_nodes: Mutex::new(accessible_nodes),
+            accessible_waiting_on_condition: Mutex::new(accessible_waiting_on_condition),
+            nodes_waiting_on_condition: nodes_waiting.into(),
             completed_nodes: Mutex::new(HashSet::new()),
             total_nodes,
             count_completed: 0.into(),
-            signal: Condvar::new(),
             fail_fast
         }
     }
@@ -224,7 +272,25 @@ impl<Err> SchedulerInstance<Err> {
     // Gets the next node that should be executed
     pub(crate) fn get_next_wait(&self) -> Result<Option<TaskId>, SchedulerError> {
         let mut lock = self.accessible_nodes.lock()?;
-        loop {
+        'outer: loop {
+            let nodes_waiting = self.nodes_waiting_on_condition.load(Ordering::Relaxed);
+            if nodes_waiting != 0 {
+                let mut lock = self.accessible_waiting_on_condition.lock()?;
+                for priority in &self.priorities {
+                    let nodes = lock.get_mut(priority).unwrap();
+                    for i in 0..nodes.len() {
+                        if let Some(task_id) = nodes.get(i) {
+                            if self.scheduler.tasks[task_id].can_start.as_ref().unwrap().load(Ordering::Relaxed) {
+                                let v = self.nodes_waiting_on_condition.fetch_sub(1, Ordering::Relaxed);
+                                if v != nodes_waiting { continue 'outer; } // retry
+                                let task_id = nodes.swap_remove(i);
+                                return Ok(Some(task_id));
+                            }
+                        }
+                    }
+                }
+            }
+
             for priority in &self.priorities {
                 let nodes = lock.get_mut(priority).unwrap();
                 let node = nodes.pop_back();
@@ -237,7 +303,7 @@ impl<Err> SchedulerInstance<Err> {
                 return Ok(None);
             }
 
-            lock = self.signal.wait(lock)?;
+            lock = self.scheduler.signal.wait(lock)?;
         }
     }
 
@@ -279,7 +345,7 @@ impl<Err> SchedulerInstance<Err> {
         self.count_completed.fetch_add(1, Ordering::Relaxed);
 
         if nodes_count > 0 || self.count_completed.load(Ordering::Relaxed) == self.total_nodes {
-            self.signal.notify_all();
+            self.scheduler.signal.notify_all();
         }
 
         Ok(())
@@ -302,12 +368,13 @@ impl<Err> SchedulerInstance<Err> {
                 trace!("Task {} cancelled", task_name);
             }
 
-            // if self.fail_fast {
-            //     return Ok(());
-            // } else {
+            if self.fail_fast {
+                // Err?
+                return Ok(());
+            } else {
                 task.cancel();
-                return Err(TaskExecutionError::Cancelled(task.id()).into())
-            // }
+                return Err(TaskExecutionError::Cancelled(task.id(), task.name().map(|str| str.to_string())).into())
+            }
         }
 
         task.run()?;

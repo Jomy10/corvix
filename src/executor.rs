@@ -106,7 +106,7 @@ impl Executor {
                             match err {
                                 ExecutionError::SchedulerError(_) => {},
                                 ExecutionError::TaskExecutionError(task_execution_error) => match task_execution_error {
-                                    TaskExecutionError::Cancelled(_) => return Ok(()),
+                                    TaskExecutionError::Cancelled(_, _) => return Ok(()),
                                     _ => {}
                                 },
                             }
@@ -165,10 +165,9 @@ impl Executor {
     }
 }
 
-#[derive(Debug)]
 pub struct ExecutorFuture<Err> {
     worker_handles: Vec<JoinHandle<Result<(), SchedulerError>>>,
-    errs: Arc<Mutex<Vec<TaskExecutionError<Err>>>>
+    errs: Arc<Mutex<Vec<TaskExecutionError<Err>>>>,
 }
 
 impl<Err> ExecutorFuture<Err> {
