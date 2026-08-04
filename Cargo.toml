@@ -22,6 +22,7 @@ default = ["log"]
 
 # Adds parallelization for computing `graph_with_names`
 rayon = ["petgraph/rayon", "dep:rayon"]
+
 # Enable logging
 log = ["dep:log"]
 # Log names instead of id's

@@ -47,7 +47,7 @@ pub struct AddTaskDescriptor<'a> {
 pub struct Scheduler<Err> {
     pub(crate) tasks: HashMap<TaskId, Task<Err>>,
     pub(crate) dag: DiGraphMap<Uuid, ()>,
-    signal: Arc<Condvar>
+    pub(crate) signal: Arc<Condvar>
 }
 
 impl<Err> Scheduler<Err> {
@@ -209,7 +209,7 @@ impl std::fmt::Display for SchedulerError {
 }
 
 pub(crate) struct SchedulerInstance<Err> {
-    scheduler: Scheduler<Err>,
+    pub(crate) scheduler: Scheduler<Err>,
     // Priorities in descending order
     priorities: Vec<u32>,
     // Nodes which have all their dependencies resolved, grouped by priority
@@ -270,9 +270,13 @@ impl<Err> SchedulerInstance<Err> {
     }
 
     // Gets the next node that should be executed
-    pub(crate) fn get_next_wait(&self) -> Result<Option<TaskId>, SchedulerError> {
+    pub(crate) fn get_next_wait(&self, cancel: &AtomicBool) -> Result<Option<TaskId>, SchedulerError> {
         let mut lock = self.accessible_nodes.lock()?;
         'outer: loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Ok(None);
+            }
+
             let nodes_waiting = self.nodes_waiting_on_condition.load(Ordering::Relaxed);
             if nodes_waiting != 0 {
                 let mut lock = self.accessible_waiting_on_condition.lock()?;
@@ -402,7 +406,7 @@ impl<Err> SchedulerInstance<Err> {
         Ok(())
     }
 
-    #[cfg(feature = "log")]
+    #[cfg(all(feature = "log", feature = "log-names"))]
     pub(crate) fn node_name(&self, id: &TaskId) -> Option<&str> {
         self.scheduler.tasks[id].name()
     }

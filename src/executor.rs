@@ -58,6 +58,7 @@ impl Executor {
                             Err(err) => match err {
                                 ExecutionError::SchedulerError(scheduler_error) => {
                                     cancel.store(true, Ordering::Relaxed);
+                                    task_queue.scheduler.signal.notify_all();
                                     return Err(scheduler_error)
                                 },
                                 ExecutionError::TaskExecutionError(task_execution_error) => {
@@ -73,6 +74,7 @@ impl Executor {
                     Ok(res) => res,
                     Err(err) => {
                         cancel.store(true, Ordering::Relaxed);
+                        task_queue.scheduler.signal.notify_all();
                         let mut errs = errs.lock()?;
                         errs.push(TaskExecutionError::Panic(err));
                         Ok(())
@@ -111,11 +113,13 @@ impl Executor {
                                 },
                             }
                             cancel.store(true, Ordering::Relaxed);
+                            task_queue.scheduler.signal.notify_all();
                         }
                         res
                     },
                     Err(err) => {
                         cancel.store(true, Ordering::Relaxed);
+                        task_queue.scheduler.signal.notify_all();
                         Err(ExecutionError::TaskExecutionError(TaskExecutionError::Panic(err)))
                     },
                 }
@@ -131,7 +135,7 @@ impl Executor {
                 return Ok(())
             }
 
-            let Some(task_id) = task_queue.get_next_wait()? else {
+            let Some(task_id) = task_queue.get_next_wait(cancel)? else {
                 return Ok(());
             };
 
@@ -238,6 +242,27 @@ impl<Err> ExecutorFailFastFuture<Err> {
 
     pub fn is_finished(&self) -> bool {
         self.worker_handles.iter().find(|h| !h.is_finished()).is_none()
+    }
+}
+
+impl<Err> ExecutorFailFastFuture<Err> where Err: std::fmt::Debug {
+    pub fn wait_log_all(self) -> Result<(), ExecutorFailFastFutureError<Err>> {
+        let mut err = None;
+        for handle in self.worker_handles {
+            match handle.join()? {
+                Ok(()) => {},
+                Err(err_) => {
+                    error!("{:?}", err_);
+                    err = Some(err_);
+                }
+            }
+        }
+
+        if let Some(err) = err {
+            return Err(err.into());
+        }
+
+        Ok(())
     }
 }
 
